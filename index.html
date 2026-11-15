@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Apartment planner</title>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="labels"></div>
+
+    <header id="top">
+      <div class="brand"><b>Unit 487</b><span>1 bed · 1 bath · <i id="where">Entry</i></span></div>
+      <nav id="modes">
+        <button data-mode="walk" class="on">Walk</button>
+        <button data-mode="dollhouse">Dollhouse</button>
+        <button data-mode="top">Top</button>
+      </nav>
+      <button id="toggle-panel" title="Show or hide the furniture panel">Furniture</button>
+    </header>
+
+    <aside id="panel"></aside>
+
+    <section id="lighting">
+      <div id="presets">
+        <button data-v="1,1,1">Day</button>
+        <button data-v="1,0,1.25">Daylight only</button>
+        <button data-v="0.12,1,1.5">Evening</button>
+        <button data-v="0,1,1.9">Night</button>
+      </div>
+      <label>Daylight<input id="l-day" type="range" min="0" max="2" step="0.01" value="1" /></label>
+      <label>Lights<input id="l-lamp" type="range" min="0" max="2" step="0.01" value="1" /></label>
+      <label>Exposure<input id="l-exposure" type="range" min="0.3" max="3" step="0.01" value="1" /></label>
+    </section>
+
+    <div id="mapwrap"><canvas id="minimap"></canvas></div>
+    <div id="help">
+      <span class="walk">Drag to look · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>Shift</kbd> faster · double-click the floor or click the map to go there</span>
+      <span class="doll">Drag to orbit · scroll to zoom · right-drag to pan</span>
+    </div>
+    <div id="loading"><span>Loading apartment…</span></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
