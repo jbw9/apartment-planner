@@ -10,12 +10,13 @@
     <div id="labels"></div>
 
     <header id="top">
-      <div class="brand"><b>Unit 487</b><span>1 bed · 1 bath · <i id="where">Entry</i></span></div>
+      <div class="brand"><select id="unit" hidden title="Switch apartment"></select><b id="title">Unit 487</b><span><span id="subtitle">1 bed · 1 bath</span> · <i id="where">Entry</i></span></div>
       <nav id="modes">
         <button data-mode="walk" class="on">Walk</button>
         <button data-mode="dollhouse">Dollhouse</button>
         <button data-mode="top">Top</button>
       </nav>
+      <button id="toggle-guess" hidden title="Tint the parts built from the floor plan alone, without a photo">Guessed areas</button>
       <button id="toggle-panel" title="Show or hide the furniture panel">Furniture</button>
     </header>
 

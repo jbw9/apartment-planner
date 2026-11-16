@@ -9,7 +9,10 @@ import './style.css';
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
 const canvas = $<HTMLCanvasElement>('#view');
-const DEBUG = new URLSearchParams(location.search).has('debug');
+const QUERY = new URLSearchParams(location.search);
+const DEBUG = QUERY.has('debug');
+// every unit is a folder holding plan.json, the model and its lightmaps; unit 487 is the one shipped with the app
+const BASE = (QUERY.get('unit') ?? 'model').replace(/\/?$/, '/');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: DEBUG });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.toneMapping = THREE.NeutralToneMapping;
@@ -31,15 +34,17 @@ let mode: Mode = 'walk';
 const light = { day: 1, lamp: 1, exposure: 1 };
 // calibration of the two baked passes against the walkthrough video (bright neutral daylight, warm pools from the cans)
 const tune = { exposure: 1.35, dayGain: 3.0, lampGain: 0.55, lampTint: new THREE.Vector3(0.92, 1.0, 1.16), backdrop: 2.0, backdropRot: 1.7 };
-const CUT = 87 * IN; // dollhouse section height
+let CUT = 87 * IN; // dollhouse section height
 const clip = new THREE.Plane(new THREE.Vector3(0, -1, 0), CUT);
+const bounds = { u0: 0, u1: 0, v0: 0, v1: 0, cu: 0, cv: 0 }; // of the walls, in inches
 
 // ------------------------------------------------------------------ textures & materials
 const tl = new THREE.TextureLoader();
-function tex(file: string, repeatU: number, repeatV: number, srgb = true) {
+function tex(file: string, repeatU: number, repeatV: number, srgb = true, turned = false) {
   const t = tl.load('tex/' + file);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(repeatU, repeatV);
+  if (turned) t.rotation = Math.PI / 2;
   t.anisotropy = renderer.capabilities.getMaxAnisotropy();
   if (srgb) t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -64,7 +69,6 @@ const std = (p: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardM
 // Planar reflection for the floor: the vinyl plank picks up the window glare at grazing angles, like the real one.
 const floorRefl = new Reflector(new THREE.PlaneGeometry(60, 60), { textureWidth: 1024, textureHeight: 1024, clipBias: 0.003 });
 floorRefl.rotation.x = -Math.PI / 2;
-floorRefl.position.set(3.3, 0, 5);
 floorRefl.renderOrder = -10;
 floorRefl.getRenderTarget().texture.type = THREE.HalfFloatType;
 Object.assign(floorRefl.material, { colorWrite: false, depthWrite: false, depthTest: false });
@@ -129,7 +133,40 @@ const MATS: Record<string, () => THREE.Material> = {
   glass: () => new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0, metalness: 0, transparent: true, opacity: 0.1, depthWrite: false, envMapIntensity: 1.2 }),
   glass_rail: () => new THREE.MeshPhysicalMaterial({ color: 0xdfeeee, roughness: 0, metalness: 0, transparent: true, opacity: 0.16, depthWrite: false }),
 };
+// Finishes of generated units: plan.json names each material's kind (the kit's vocabulary), colour and plank direction.
+type Kit = (c: THREE.Color, turned: boolean) => THREE.Material;
+const flat = (roughness: number, metalness = 0): Kit => (c) => std({ color: c, roughness, metalness });
+const basic: Kit = (c) => new THREE.MeshBasicMaterial({ color: c });
+const KIT: Record<string, Kit> = {
+  wall_paint: (c) => std({ color: c, roughness: 0.92, normalMap: wallN(), normalScale: new THREE.Vector2(0.25, 0.25) }),
+  ceiling_paint: flat(0.96), trim_paint: flat(0.45), door_paint: flat(0.4),
+  floor_wood: (c, t) => reflectiveFloor(std({
+    color: c, map: tex('floor_color.jpg', m(112), m(144), true, t), roughnessMap: tex('floor_rough.jpg', m(112), m(144), false, t),
+    normalMap: tex('floor_normal.jpg', m(112), m(144), false, t), normalScale: new THREE.Vector2(0.5, 0.5), roughness: 1, envMapIntensity: 0.25,
+  })),
+  floor_tile: flat(0.3), carpet: flat(1), rug: flat(1),
+  wall_tile: (c) => std({ color: c, map: tex('subway.jpg', m(12), m(6)), roughness: 0.14 }),
+  stone_tile: (c) => std({ color: c, map: tex('tile_marble.jpg', m(48), m(24)), roughness: 0.18 }),
+  ceiling_tile: (c) => std({ color: c, map: tex('ceiling_tile.jpg', m(24), m(48)), roughness: 0.95 }),
+  cabinet_paint: flat(0.5), cabinet_wood: (c) => std({ color: c, map: tex('cab_wood.jpg', m(24), m(24)), roughness: 0.55 }),
+  counter: flat(0.22),
+  stainless: (c) => std({ color: c.multiplyScalar(1.2), metalness: 1, roughness: 0.34, roughnessMap: tex('brushed.jpg', m(8), m(8), false) }),
+  black_metal: flat(0.45, 0.3), chrome: flat(0.07, 1), nickel: flat(0.32, 1), brass: flat(0.3, 1),
+  black_glass: flat(0.05), appliance_white: flat(0.3), appliance_black: flat(0.4), porcelain: flat(0.07), mirror: flat(0.02, 1),
+  plastic: flat(0.35), vinyl: flat(0.4), blind: flat(0.5), fabric: flat(0.95), leather: flat(0.5), wood: flat(0.55), plant: flat(0.6),
+  concrete: flat(0.9), frosted_glass: flat(0.6), screen: flat(0.08),
+  glass: () => MATS.glass(), emit_warm: basic, emit_cool: basic, emit_shade: basic, emit_display: basic, outside: basic,
+};
+function material(name: string): THREE.Material {
+  const k = plan.materials?.[name];
+  if (!k || !KIT[k.key]) return (MATS[name] ?? (() => std({ color: 0xff00ff })))();
+  return KIT[k.key](new THREE.Color().setRGB(k.rgb[0] / 255, k.rgb[1] / 255, k.rgb[2] / 255, THREE.SRGBColorSpace), k.plank === 'v');
+}
+const kind = (name: string) => plan.materials?.[name]?.key ?? name;
 const emitters: { mat: THREE.MeshBasicMaterial; base: THREE.Color; gain: number }[] = [];
+const outsides: { mat: THREE.MeshBasicMaterial; base: THREE.Color }[] = [];
+const guessed: { mat: THREE.MeshStandardMaterial; base: THREE.Color }[] = [];
+let showGuess = false;
 
 // ------------------------------------------------------------------ baked light mixing (daylight + fixtures)
 class LightMix {
@@ -176,7 +213,7 @@ function buildOutdoors() {
   backdropMat.map = t;
   const R = 34, H = 42;
   const cyl = (backdropCyl = new THREE.Mesh(new THREE.CylinderGeometry(R, R, H, 64, 1, true), backdropMat));
-  cyl.position.set(130 * IN, 1.5 + H * 0.5 - H * 0.36, 0);
+  cyl.position.set(bounds.cu * IN, 1.5 + H * 0.5 - H * 0.36, (bounds.v0 + 28) * IN);
   cyl.rotation.y = Math.PI * 0.15;
   scene.add(cyl);
   ground.rotation.x = -Math.PI / 2;
@@ -201,7 +238,7 @@ const roomLabels: { el: HTMLElement; pos: THREE.Vector3 }[] = [];
 function buildRoomLabels() {
   const merged: Record<string, [number, number, number, number]> = { ...plan.rooms };
   for (const [name, r] of Object.entries(merged)) {
-    if (name === 'Coat closet' || name === 'Laundry') continue;
+    if (/closet|laundry|#/i.test(name)) continue;
     const el = document.createElement('div');
     el.className = 'room';
     el.innerHTML = `<b>${name}</b><span>${fmt(r[1] - r[0])} × ${fmt(r[3] - r[2])}</span>`;
@@ -216,11 +253,8 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 const cubeRT = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType });
 const cubeCam = new THREE.CubeCamera(0.05, 400, cubeRT);
 let editor: Editor;
-let bathMirror: Reflector;
+const mirrors: Reflector[] = [];
 function captureProbes() {
-  const spots: Record<string, [number, number]> = {
-    Living: [189, 75], Kitchen: [180, 215], Entry: [154, 350], Bedroom: [58, 80], Closet: [73, 190], Bath: [80, 300],
-  };
   const prevClip = renderer.clippingPlanes;
   renderer.clippingPlanes = [];
   const capsVis = caps.visible;
@@ -228,19 +262,19 @@ function captureProbes() {
   scene.environment = null;
   // reflectors re-target the renderer mid-draw, which would corrupt a cube face
   const reflVis = floorRefl.visible;
-  floorRefl.visible = bathMirror.visible = false;
+  floorRefl.visible = false;
+  for (const mr of mirrors) mr.visible = false;
   const strength = reflUniforms.uReflStrength.value;
   reflUniforms.uReflStrength.value = 0;
-  for (const [name, [u, v]] of Object.entries(spots)) {
-    cubeCam.position.set(u * IN, 1.45, v * IN);
+  for (const [name, r] of Object.entries(plan.rooms)) {
+    cubeCam.position.set(((r[0] + r[1]) / 2) * IN, 1.45, ((r[2] + r[3]) / 2) * IN);
     cubeCam.update(renderer, scene);
     probes.get(name)?.dispose();
     probes.set(name, pmrem.fromCubemap(cubeRT.texture).texture);
   }
-  for (const alias of [['Coat closet', 'Entry'], ['Laundry', 'Bath']]) probes.set(alias[0], probes.get(alias[1])!);
-  scene.environment = probes.get(mode === 'walk' ? walkRoom() : 'Living') ?? null;
+  scene.environment = probes.get(mode === 'walk' ? walkRoom() : mainRoom) ?? null;
   floorRefl.visible = reflVis;
-  bathMirror.visible = true;
+  for (const mr of mirrors) mr.visible = true;
   reflUniforms.uReflStrength.value = strength;
   renderer.clippingPlanes = prevClip;
   caps.visible = capsVis;
@@ -251,6 +285,8 @@ let probeTimer = 0;
 function applyLight() {
   for (const mx of mixes) mx.update();
   for (const e of emitters) e.mat.color.copy(e.base).multiplyScalar(0.05 + e.gain * light.lamp);
+  for (const o of outsides) o.mat.color.copy(o.base).multiplyScalar(0.03 + 1.6 * light.day);
+  for (const g of guessed) g.mat.color.copy(g.base).lerp(GUESS_TINT, showGuess ? 0.6 : 0);
   const d = light.day;
   (sky.material as THREE.MeshBasicMaterial).color.setRGB(0.06 + 1.9 * d, 0.07 + 2.05 * d, 0.1 + 2.3 * d);
   backdropMat.color.setScalar(0.03 + tune.backdrop * d);
@@ -262,20 +298,74 @@ function applyLight() {
 }
 
 // ------------------------------------------------------------------ load
+const GUESS_TINT = new THREE.Color(0xff8a3d);
+let mainRoom = 'Living';
+
+/** A real planar reflection in front of each mirror the unit lists (the two largest; each one redraws the scene). */
+function buildMirrors() {
+  const list = plan.mirrors ?? [[30.65, 30.65, 310.5, 346.5, 42, 80]];
+  for (const [u0, u1, v0, v1, z0, z1] of [...list].sort((a, b) => (b[5] - b[4]) * (b[1] - b[0] + b[3] - b[2]) - (a[5] - a[4]) * (a[1] - a[0] + a[3] - a[2])).slice(0, 2)) {
+    const alongV = v1 - v0 > u1 - u0, cu = (u0 + u1) / 2, cv = (v0 + v1) / 2;
+    // it faces whichever side has a room in front of it
+    const sign = roomAt(cu + (alongV ? 8 : 0), cv + (alongV ? 0 : 8)) ? 1 : -1;
+    const mr = new Reflector(new THREE.PlaneGeometry((alongV ? v1 - v0 : u1 - u0) * IN, (z1 - z0) * IN), { textureWidth: 1024, textureHeight: 1024, color: 0xb8bcbc, clipBias: 0.003 });
+    mr.rotation.y = alongV ? (sign * Math.PI) / 2 : sign > 0 ? 0 : Math.PI;
+    mr.position.set((alongV ? (sign > 0 ? u1 : u0) + sign * 0.15 : cu) * IN, ((z0 + z1) / 2) * IN, (alongV ? cv : (sign > 0 ? v1 : v0) + sign * 0.15) * IN);
+    scene.add(mr);
+    mirrors.push(mr);
+  }
+}
+
 async function load() {
   const status = $('#loading span');
-  await loadPlan();
+  await loadPlan(BASE);
+  Object.assign(tune, plan.tune ?? {});
+  Object.assign(bounds, plan.bounds ?? {
+    u0: Math.min(...wallRects.map((w) => w.u0)) - 6, u1: Math.max(...wallRects.map((w) => w.u1)) + 6,
+    v0: Math.min(...wallRects.map((w) => w.v0)) - 6, v1: Math.max(...wallRects.map((w) => w.v1)) + 6,
+  });
+  bounds.cu = (bounds.u0 + bounds.u1) / 2;
+  bounds.cv = (bounds.v0 + bounds.v1) / 2;
+  CUT = clip.constant = Math.min(87, plan.ceiling - 20) * IN;
+  floorRefl.position.set(bounds.cu * IN, 0, bounds.cv * IN);
+  // start in the middle of the biggest room, looking toward the middle of the unit
+  const [big, br] = Object.entries(plan.rooms).sort((a, b) => (b[1][1] - b[1][0]) * (b[1][3] - b[1][2]) - (a[1][1] - a[1][0]) * (a[1][3] - a[1][2]))[0];
+  mainRoom = big;
+  plan.start ??= [(br[0] + br[1]) / 2, (br[2] + br[3]) / 2];
+  // the middle of a room is often a table or a sofa: step outward until there is floor to stand on
+  for (let r = 0; r < 120 && !walkable(plan.start[0], plan.start[1]); r += 6) {
+    for (let k = 0; k < 12; k++) {
+      const u = (br[0] + br[1]) / 2 + r * Math.cos(k * Math.PI / 6), v = (br[2] + br[3]) / 2 + r * Math.sin(k * Math.PI / 6);
+      if (walkable(u, v)) { plan.start = [u, v]; break; }
+    }
+  }
+  walk.u = plan.start[0];
+  walk.v = plan.start[1];
+  look.yaw = walk.yaw = plan.start[2] ?? Math.atan2(walk.u - bounds.cu, walk.v - bounds.cv);
+  if (plan.title) $('#title').textContent = plan.title;
+  // the apartments published with the site; a unit opened from a job link is not in the list and keeps its plain title
+  fetch('units.json').then((r) => r.json()).then((list: { unit: string; title: string }[]) => {
+    const here = BASE.slice(0, -1), sel = $<HTMLSelectElement>('#unit');
+    if (!list.some((u) => u.unit === here)) return;
+    for (const u of list) sel.add(new Option(u.title, u.unit, false, u.unit === here));
+    sel.hidden = false;
+    $('#title').hidden = true;
+    sel.onchange = () => { location.search = sel.value === 'model' ? '' : '?unit=' + sel.value; };
+  }).catch(() => {});
+  if (plan.subtitle !== undefined) $('#subtitle').textContent = plan.subtitle;
+  if (plan.survey?.scale?.method === 'pixels') $('#subtitle').textContent += ' · sizes estimated from the drawing';
   const exr = new EXRLoader().setDataType(THREE.HalfFloatType);
   const lm = async (n: string) => {
-    const t = await exr.loadAsync(`model/lm_${n}.exr`);
+    const t = await exr.loadAsync(`${BASE}lm_${n}.exr`);
     t.minFilter = t.magFilter = THREE.LinearFilter;
     t.generateMipmaps = false;
     return t;
   };
   status.textContent = 'Loading baked lighting…';
-  const [aDay, aLamp, bDay, bLamp, gltf] = await Promise.all([lm('A_day'), lm('A_lamp'), lm('B_day'), lm('B_lamp'), new GLTFLoader().loadAsync('model/apartment.glb')]);
-  const mixA = new LightMix(aDay, aLamp), mixB = new LightMix(bDay, bLamp);
-  mixes.push(mixA, mixB);
+  const groups = Object.keys(plan.lightmaps ?? { A: 0, B: 0 });
+  const [gltf, ...maps] = await Promise.all([new GLTFLoader().loadAsync(BASE + (plan.model ?? 'apartment.glb')), ...groups.flatMap((g) => [lm(g + '_day'), lm(g + '_lamp')])]);
+  const mixOf = new Map(groups.map((g, i) => [g, new LightMix(maps[2 * i], maps[2 * i + 1])]));
+  mixes.push(...mixOf.values());
   status.textContent = 'Building scene…';
 
   const cache = new Map<string, THREE.Material>();
@@ -289,31 +379,39 @@ async function load() {
     const key = group + '/' + name;
     let mat = cache.get(key);
     if (!mat) {
-      mat = (MATS[name] ?? (() => std({ color: 0xff00ff })))();
+      mat = material(name);
       mat.name = name;
-      const mix = group.startsWith('Shell') ? mixA : group.startsWith('Fixtures') ? mixB : null;
+      // generated units name their lightmapped groups LM_<letter>[_guess]; unit 487 calls them Shell and Fixtures
+      const mix = mixOf.get(group.startsWith('LM_') ? group[3] : group.startsWith('Shell') ? 'A' : group.startsWith('Fixtures') ? 'B' : '');
       if (mix && mat instanceof THREE.MeshStandardMaterial) {
         mat.lightMap = mix.rt.texture;
         mat.lightMapIntensity = Math.PI;
         bakedOnly(mat);
+        if (group.endsWith('_guess')) guessed.push({ mat, base: mat.color.clone() });
       }
-      if (name === 'light_emit' || name === 'led_emit') {
-        emitters.push({ mat: mat as THREE.MeshBasicMaterial, base: new THREE.Color(name === 'led_emit' ? 0xfff2e0 : 0xffdcae), gain: name === 'led_emit' ? 5 : 9 });
+      const k = kind(name);
+      if (k === 'light_emit' || k === 'led_emit') {
+        emitters.push({ mat: mat as THREE.MeshBasicMaterial, base: new THREE.Color(k === 'led_emit' ? 0xfff2e0 : 0xffdcae), gain: k === 'led_emit' ? 5 : 9 });
+      } else if (k === 'emit_warm' || k === 'emit_cool' || k === 'emit_shade') {
+        emitters.push({ mat: mat as THREE.MeshBasicMaterial, base: (mat as THREE.MeshBasicMaterial).color.clone(), gain: k === 'emit_shade' ? 1.4 : 7 });
+      } else if (k === 'outside') {
+        outsides.push({ mat: mat as THREE.MeshBasicMaterial, base: (mat as THREE.MeshBasicMaterial).color.clone() });
       }
       mat.clippingPlanes = null;
       cache.set(key, mat);
     }
     mesh.material = mat;
-    if (name === 'mirror') mesh.visible = false;
-    if (name === 'glass' || name === 'glass_rail') mesh.renderOrder = 5;
+    if (kind(name) === 'mirror') mesh.visible = false;
+    if (kind(name) === 'glass' || name === 'glass_rail') mesh.renderOrder = 5;
   });
   scene.add(gltf.scene);
 
-  // real planar reflection for the bathroom mirror
-  const mirror = (bathMirror = new Reflector(new THREE.PlaneGeometry(36 * IN, 38 * IN), { textureWidth: 1024, textureHeight: 1024, color: 0xb8bcbc, clipBias: 0.003 }));
-  mirror.rotation.y = Math.PI / 2;
-  mirror.position.set(30.65 * IN, 61 * IN, 328.5 * IN);
-  scene.add(mirror);
+  buildMirrors();
+  if (guessed.length) {
+    const b = $('#toggle-guess');
+    b.hidden = false;
+    b.onclick = () => { showGuess = !showGuess; b.classList.toggle('on', showGuess); applyLight(); };
+  }
 
   scene.add(floorRefl);
   buildOutdoors();
@@ -323,7 +421,7 @@ async function load() {
     scene, dom: canvas, panel: $('#panel'), labels: $('#labels'),
     camera: () => (mode === 'walk' ? walkCam : orbitCam),
     lockCamera: (l) => { orbit.enabled = !l && mode === 'dollhouse'; dragLook = false; },
-    envFor: (room) => probes.get(room ?? 'Living') ?? probes.get('Living') ?? null,
+    envFor: (room) => probes.get(room ?? mainRoom) ?? probes.get(mainRoom) ?? null,
     changed: () => {},
   });
   applyLight();
@@ -332,16 +430,17 @@ async function load() {
   $('#loading').remove();
   setMode('walk');
   renderer.setAnimationLoop(frame);
-  if (DEBUG) Object.assign(window, { app: { scene, renderer, walk, light, applyLight, setMode, editor, orbitCam, orbit, frame, tune } });
+  if (DEBUG) Object.assign(window, { app: { scene, renderer, walk, look, light, applyLight, setMode, editor, orbitCam, orbit, frame, tune } });
 }
 
 // ------------------------------------------------------------------ walking
-const walk = { u: 152, v: 372, yaw: 0, pitch: -0.04, eye: 63 };
+const walk = { u: 0, v: 0, yaw: 0, pitch: -0.04, eye: 63 };
 const keys = new Set<string>();
-let dragLook = false;
 let glide: { u: number; v: number } | null = null;
-const walkRoom = () => roomAt(walk.u, walk.v) ?? 'Living';
+const walkRoom = () => roomAt(walk.u, walk.v) ?? mainRoom;
 
+let dragLook = false;
+const look = { yaw: walk.yaw, pitch: walk.pitch };
 canvas.addEventListener('pointerdown', (e) => {
   if (mode !== 'walk' || e.button !== 0) return;
   dragLook = true;
@@ -349,8 +448,8 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 canvas.addEventListener('pointermove', (e) => {
   if (!dragLook) return;
-  walk.yaw -= e.movementX * 0.0032;
-  walk.pitch = THREE.MathUtils.clamp(walk.pitch - e.movementY * 0.0032, -1.2, 1.2);
+  look.yaw -= e.movementX * 0.0045;
+  look.pitch = THREE.MathUtils.clamp(look.pitch - e.movementY * 0.0045, -1.2, 1.2);
 });
 for (const ev of ['pointerup', 'pointercancel']) canvas.addEventListener(ev, () => (dragLook = false));
 canvas.addEventListener('dblclick', (e) => {
@@ -369,26 +468,42 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => keys.clear());
 
+const vel = { u: 0, v: 0 };
+let stride = 0;
 function stepWalk(dt: number) {
   const f = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
   const s = (keys.has('d') ? 1 : 0) - (keys.has('a') ? 1 : 0);
   const turn = (keys.has('arrowleft') ? 1 : 0) - (keys.has('arrowright') ? 1 : 0);
-  walk.yaw += turn * dt * 1.8;
-  let du = 0, dv = 0;
+  look.yaw += turn * dt * 1.8;
+  // the head eases toward where the drag points, so the view glides instead of jerking with every mouse sample
+  const ease = 1 - Math.exp(-dt * 20);
+  walk.yaw += (look.yaw - walk.yaw) * ease;
+  walk.pitch += (look.pitch - walk.pitch) * ease;
+  let tu = 0, tv = 0;
   if (f || s) {
     glide = null;
-    const sp = (keys.has('shift') ? 110 : 58) * dt;
+    const sp = (keys.has('shift') ? 110 : 58) / Math.hypot(f, s);
     const sin = Math.sin(walk.yaw), cos = Math.cos(walk.yaw);
-    du = (-sin * f + cos * s) * sp;
-    dv = (-cos * f - sin * s) * sp;
+    tu = (-sin * f + cos * s) * sp;
+    tv = (-cos * f - sin * s) * sp;
   } else if (glide) {
     const gu = glide.u - walk.u, gv = glide.v - walk.v, dist = Math.hypot(gu, gv);
     if (dist < 2) glide = null;
-    else { const sp = Math.min(dist, 130 * dt); du = (gu / dist) * sp; dv = (gv / dist) * sp; }
+    else { const sp = Math.min(130, dist * 4); tu = (gu / dist) * sp; tv = (gv / dist) * sp; }
   }
-  if (du && walkable(walk.u + du, walk.v)) walk.u += du; else if (du && glide) glide = null;
-  if (dv && walkable(walk.u, walk.v + dv)) walk.v += dv; else if (dv && glide) glide = null;
-  walkCam.position.set(walk.u * IN, walk.eye * IN, walk.v * IN);
+  // ease toward the wanted velocity so starts and stops have weight instead of snapping
+  const k = 1 - Math.exp(-dt * (tu || tv ? 11 : 8));
+  vel.u += (tu - vel.u) * k;
+  vel.v += (tv - vel.v) * k;
+  const du = vel.u * dt, dv = vel.v * dt;
+  if (walkable(walk.u + du, walk.v)) walk.u += du; else { vel.u = 0; glide = null; }
+  if (walkable(walk.u, walk.v + dv)) walk.v += dv; else { vel.v = 0; glide = null; }
+  const speed = Math.hypot(vel.u, vel.v);
+  stride += speed * dt;
+  const bob = Math.sin(stride * 0.105) * 0.45 * Math.min(1, speed / 58);
+  const fov = 72 + 6 * THREE.MathUtils.smoothstep(speed, 62, 105);
+  if (Math.abs(walkCam.fov - fov) > 0.01) { walkCam.fov += (fov - walkCam.fov) * Math.min(1, dt * 8); walkCam.updateProjectionMatrix(); }
+  walkCam.position.set(walk.u * IN, (walk.eye + bob) * IN, walk.v * IN);
   walkCam.rotation.set(walk.pitch, walk.yaw, 0, 'YXZ');
 }
 
@@ -403,9 +518,10 @@ function setMode(next: Mode, top = false) {
   orbit.enabled = doll;
   document.body.dataset.mode = top ? 'top' : mode;
   if (doll) {
-    orbit.target.set(125 * IN, 0.4, 198 * IN);
-    if (top) orbitCam.position.set(125 * IN, 21, 198 * IN + 0.01);
-    else orbitCam.position.set(125 * IN + 9, 13, 198 * IN + 12);
+    const cx = bounds.cu * IN, cz = bounds.cv * IN;
+    orbit.target.set(cx, 0.4, cz);
+    if (top) orbitCam.position.set(cx, 21, cz + 0.01);
+    else orbitCam.position.set(cx + 9, 13, cz + 12);
     orbit.update();
   }
   document.querySelectorAll<HTMLElement>('#modes button').forEach((b) => b.classList.toggle('on', b.dataset.mode === document.body.dataset.mode));
@@ -413,7 +529,7 @@ function setMode(next: Mode, top = false) {
 
 // ------------------------------------------------------------------ minimap
 const mini = $<HTMLCanvasElement>('#minimap');
-const B = { u0: -12, u1: 270, v0: -72, v1: 408 };
+const B = bounds;
 function drawMinimap() {
   const dpr = Math.min(devicePixelRatio, 2);
   const W = mini.clientWidth, H = mini.clientHeight;
@@ -425,14 +541,16 @@ function drawMinimap() {
   g.clearRect(0, 0, mini.width, mini.height);
   g.fillStyle = '#f4f1ea';
   for (const r of Object.values(plan.rooms)) g.fillRect(X(r[0]), Y(r[2]), (r[1] - r[0]) * s, (r[3] - r[2]) * s);
-  g.fillStyle = '#e3e6e4';
-  g.fillRect(X(125), Y(-70), 116 * s, 60 * s);
+  if (plan.balcony) {
+    g.fillStyle = '#e3e6e4';
+    g.fillRect(X(plan.balcony[0]), Y(plan.balcony[2]), (plan.balcony[1] - plan.balcony[0]) * s, (plan.balcony[3] - plan.balcony[2]) * s);
+  }
   g.fillStyle = '#d5d0c6';
   for (const f of fixtureRects) g.fillRect(X(f.u0), Y(f.v0), (f.u1 - f.u0) * s, (f.v1 - f.v0) * s);
   g.fillStyle = '#2b2d31';
   for (const w of wallRects) g.fillRect(X(w.u0), Y(w.v0), (w.u1 - w.u0) * s, (w.v1 - w.v0) * s);
   for (const [name, o] of Object.entries(plan.openings)) {
-    g.fillStyle = name === 'slider' || name === 'bed_window' ? '#9fd0ea' : '#f4f1ea';
+    g.fillStyle = (plan.windows ?? ['slider', 'bed_window']).includes(name) ? '#9fd0ea' : '#f4f1ea';
     g.fillRect(X(o[0]), Y(o[2]), (o[1] - o[0]) * s, (o[3] - o[2]) * s);
   }
   g.strokeStyle = '#9a958a';
@@ -498,11 +616,11 @@ function frame() {
     stepWalk(dt);
     cam = walkCam;
     const room = walkRoom();
-    if (room !== lastRoom) { lastRoom = room; scene.environment = probes.get(room) ?? scene.environment; $('#where').textContent = room; }
+    if (room !== lastRoom) { lastRoom = room; scene.environment = probes.get(room) ?? scene.environment; $('#where').textContent = room.split('#')[0]; }
   } else {
     orbit.update();
     cam = orbitCam;
-    if (lastRoom !== '*') { lastRoom = '*'; scene.environment = probes.get('Living') ?? null; $('#where').textContent = 'Dollhouse'; }
+    if (lastRoom !== '*') { lastRoom = '*'; scene.environment = probes.get(mainRoom) ?? null; $('#where').textContent = 'Dollhouse'; }
   }
   renderer.render(scene, cam);
   editor.frame(w, h);

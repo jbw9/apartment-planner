@@ -75,3 +75,6 @@ kbd { font: 10.5px ui-monospace, monospace; background: rgba(255, 255, 255, 0.13
 #help .doll, [data-mode='dollhouse'] #help .walk, [data-mode='top'] #help .walk { display: none; }
 [data-mode='dollhouse'] #help .doll, [data-mode='top'] #help .doll { display: inline; }
 #loading { position: fixed; inset: 0; display: grid; place-items: center; background: #15161a; font-size: 15px; color: var(--dim); }
+
+#unit { display: block; font: inherit; font-size: 14px; font-weight: 700; color: var(--ink); background: none; border: 0; padding: 0; margin: 0 0 1px -2px; cursor: pointer; max-width: 210px; }
+#unit option { color: #111; }

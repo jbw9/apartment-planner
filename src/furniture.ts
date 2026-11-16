@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { IN, Rect, fmt, overlap, wallRects, fixtureRects, swingRects, roomAt } from './plan';
+import { IN, Rect, fmt, overlap, plan, wallRects, fixtureRects, swingRects, roomAt } from './plan';
 
 export type Shape = 'box' | 'sofa' | 'bed' | 'table' | 'chair' | 'shelf' | 'cabinet' | 'rug' | 'tv';
 
@@ -232,7 +232,7 @@ export class Editor {
   }
 
   add(p: Partial<Item> & { name: string; shape: Shape; w: number; d: number; h: number; color: string }, at?: { u: number; v: number }) {
-    const it: Item = { id: Math.random().toString(36).slice(2, 9), rot: 0, u: at?.u ?? 189, v: at?.v ?? 70, ...p };
+    const it: Item = { id: Math.random().toString(36).slice(2, 9), rot: 0, u: at?.u ?? plan.start?.[0] ?? 189, v: at?.v ?? plan.start?.[1] ?? 70, ...p };
     this.items.push(it);
     this.rebuild(it);
     this.select(it);

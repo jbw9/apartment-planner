@@ -1,0 +1,192 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Apartment walkthrough pipeline - jobs table, API, workflow, worker role, website.
+
+Parameters:
+  Bucket: {Type: String, Description: "Existing bucket for uploads, pipeline code and the website"}
+  ApiCodeKey: {Type: String, Description: S3 key of the zipped API function}
+  AccessCode: {Type: String, NoEcho: true}
+  DailyCap: {Type: Number, Default: 5}
+  SurveyType: {Type: String, Default: c7i.xlarge}
+  # g6.2xlarge once the GPU quota is granted; until then a large CPU server bakes the lighting
+  BuildType: {Type: String, Default: c7i.12xlarge}
+  ModelArn: {Type: String, Description: Bedrock model id or inference profile the agents call}
+
+Resources:
+  Jobs:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: apartment-jobs
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: job_id, AttributeType: S}]
+      KeySchema: [{AttributeName: job_id, KeyType: HASH}]
+
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: [{Effect: Allow, Principal: {Service: ec2.amazonaws.com}, Action: "sts:AssumeRole"}]
+      ManagedPolicyArns: ["arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"]
+      Policies:
+        - PolicyName: worker
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - {Effect: Allow, Action: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], Resource: !Sub "arn:aws:s3:::${Bucket}/*"}
+              - {Effect: Allow, Action: "s3:ListBucket", Resource: !Sub "arn:aws:s3:::${Bucket}"}
+              - {Effect: Allow, Action: "dynamodb:UpdateItem", Resource: !GetAtt Jobs.Arn}
+              - {Effect: Allow, Action: "bedrock:InvokeModel", Resource: "*"}
+              - {Effect: Allow, Action: ["states:SendTaskSuccess", "states:SendTaskFailure"], Resource: "*"}
+  WorkerProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: {InstanceProfileName: apartment-worker, Roles: [!Ref WorkerRole]}
+  WorkerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties: {GroupDescription: Apartment workers - outbound only}
+
+  ApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: "sts:AssumeRole"}]
+      ManagedPolicyArns: ["arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"]
+      Policies:
+        - PolicyName: api
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - {Effect: Allow, Action: ["s3:GetObject", "s3:PutObject"], Resource: !Sub "arn:aws:s3:::${Bucket}/jobs/*"}
+              - {Effect: Allow, Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"], Resource: !GetAtt Jobs.Arn}
+              - {Effect: Allow, Action: ["states:StartExecution", "states:SendTaskSuccess"], Resource: "*"}
+              - {Effect: Allow, Action: "ssm:GetParameter", Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/apartment/*"}
+              - {Effect: Allow, Action: ["ec2:RunInstances", "ec2:CreateTags"], Resource: "*"}
+              - {Effect: Allow, Action: "iam:PassRole", Resource: !GetAtt WorkerRole.Arn}
+  Api:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: apartment-api
+      Runtime: python3.13
+      Handler: api.handler
+      Timeout: 30
+      MemorySize: 256
+      Role: !GetAtt ApiRole.Arn
+      Code: {S3Bucket: !Ref Bucket, S3Key: !Ref ApiCodeKey}
+      Environment:
+        Variables:
+          BUCKET: !Ref Bucket
+          TABLE: !Ref Jobs
+          ACCESS_CODE: !Ref AccessCode
+          DAILY_CAP: !Ref DailyCap
+          MODEL: !Ref ModelArn
+          PROFILE: !Ref WorkerProfile
+          SG: !GetAtt WorkerSG.GroupId
+          # built by name: referring to the state machine here would be a circular dependency
+          MACHINE: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:apartment-job"
+  ApiUrl:
+    Type: AWS::Lambda::Url
+    Properties: {TargetFunctionArn: !GetAtt Api.Arn, AuthType: NONE}
+  ApiUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties: {FunctionName: !Ref Api, Action: "lambda:InvokeFunctionUrl", Principal: "*", FunctionUrlAuthType: NONE}
+  ApiInvokePermission:   # function URLs need both permissions
+    Type: AWS::Lambda::Permission
+    Properties: {FunctionName: !Ref Api, Action: "lambda:InvokeFunction", Principal: "*", InvokedViaFunctionUrl: true}
+
+  FlowRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: [{Effect: Allow, Principal: {Service: states.amazonaws.com}, Action: "sts:AssumeRole"}]
+      Policies:
+        - PolicyName: invoke
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement: [{Effect: Allow, Action: "lambda:InvokeFunction", Resource: !GetAtt Api.Arn}]
+  Flow:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: apartment-job
+      RoleArn: !GetAtt FlowRole.Arn
+      DefinitionString: !Sub |
+        {
+          "StartAt": "Survey",
+          "States": {
+            "Survey": {
+              "Type": "Task", "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken", "TimeoutSeconds": 3600,
+              "Parameters": {"FunctionName": "${Api.Arn}", "Payload": {"action": "launch", "name": "survey", "stages": "ingest survey",
+                "type": "${SurveyType}", "minutes": 50, "job_id.$": "$.job_id", "token.$": "$$.Task.Token"}},
+              "ResultPath": "$.survey", "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "Failed"}], "Next": "AnyGaps"
+            },
+            "AnyGaps": {"Type": "Choice", "Choices": [{"Variable": "$.survey.gaps", "NumericGreaterThan": 0, "Next": "Ask"}], "Default": "Build"},
+            "Ask": {
+              "Type": "Task", "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken", "TimeoutSeconds": 259200,
+              "Parameters": {"FunctionName": "${Api.Arn}", "Payload": {"action": "ask", "job_id.$": "$.job_id", "token.$": "$$.Task.Token"}},
+              "ResultPath": null, "Catch": [{"ErrorEquals": ["States.Timeout"], "ResultPath": null, "Next": "Build"}], "Next": "Build"
+            },
+            "Build": {
+              "Type": "Task", "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken", "TimeoutSeconds": 14400,
+              "Parameters": {"FunctionName": "${Api.Arn}", "Payload": {"action": "launch", "name": "build", "stages": "ingest survey build bake",
+                "type": "${BuildType}", "minutes": 230, "job_id.$": "$.job_id", "token.$": "$$.Task.Token"}},
+              "ResultPath": null, "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "Failed"}], "End": true
+            },
+            "Failed": {
+              "Type": "Task", "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {"FunctionName": "${Api.Arn}", "Payload": {"action": "fail", "job_id.$": "$.job_id", "error.$": "$.error"}},
+              "Next": "Fail"
+            },
+            "Fail": {"Type": "Fail"}
+          }
+        }
+
+  SiteAccess:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig: {Name: apartment-site, OriginAccessControlOriginType: s3, SigningBehavior: always, SigningProtocol: sigv4}
+  Site:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Apartment walkthrough
+        DefaultRootObject: start.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: site
+            DomainName: !Sub "${Bucket}.s3.${AWS::Region}.amazonaws.com"
+            OriginPath: /public
+            OriginAccessControlId: !Ref SiteAccess
+            S3OriginConfig: {OriginAccessIdentity: ""}
+          - Id: api
+            DomainName: !Select [2, !Split ["/", !GetAtt ApiUrl.FunctionUrl]]
+            CustomOriginConfig: {OriginProtocolPolicy: https-only}
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # managed CachingOptimized
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad          # managed CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # managed AllViewerExceptHostHeader
+  SitePolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: "s3:GetObject"
+            Resource: !Sub "arn:aws:s3:::${Bucket}/public/*"
+            Condition: {StringEquals: {"AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Site}"}}
+
+Outputs:
+  Url: {Value: !Sub "https://${Site.DomainName}"}
+  Distribution: {Value: !Ref Site}

@@ -20,6 +20,7 @@ RES = arg("--res", 4096)
 SAMPLES = arg("--samples", 256)
 IN = 0.0254
 CEIL = S.CEIL
+U0, V0 = S.U0, S.V0
 
 
 def T(u, v, z):
@@ -229,7 +230,7 @@ BASE_RUNS = []
 
 def build_shell():
     boxes = list(S.WALLS) + list(S.OPENINGS.values()) + [(u0, u1, v0, v1, z0, z1) for u0, u1, v0, v1, z0, z1 in S.CEILINGS]
-    floor = (-10, 267.5, -10, 405.5, -S.SLAB, 0)
+    floor = (U0 - 10, 267.5, V0 - 10, 405.5, -S.SLAB, 0)
     boxes.append(floor)
     xs = sorted({b[i] for b in boxes for i in (0, 1)})
     ys = sorted({b[i] for b in boxes for i in (2, 3)})
@@ -411,23 +412,23 @@ def build_doors():
         casing(n, sides)
     T_ = 1.4
     # bedroom door: open 90 deg into the bedroom, parked along the closet wall
-    box("door_white", 84, 116, 146 - T_, 146, 0.5, 80.5)
-    lever(87, 146 - T_ / 2, 36, "v")
+    box("door_white", 84, 116, 126 - T_, 126, 0.5, 80.5)
+    lever(87, 126 - T_ / 2, 36, "v")
     # bathroom door: open into the bath
     box("door_white", 84, 116, 348 - T_, 348, 0.5, 80.5)
     lever(87, 348 - T_ / 2, 36, "v")
     # walk-in closet door: open into the closet
-    box("door_white", 38.5, 38.5 + T_, 157.5, 189.5, 0.5, 80.5)
-    lever(38.5 + T_ / 2, 186.5, 36, "u")
+    box("door_white", 38.5, 38.5 + T_, 135.5, 167.5, 0.5, 80.5)
+    lever(38.5 + T_ / 2, 164.5, 36, "u")
     # entry door, closed
     box("door_white", 128.5, 164.5, 395.3, 397.05, 0, 81)
     lever(161, 395.3 + 0.9, 38, "v", both=1.8)
     cyl("nickel", (161, 395.3, 44), 1.2, -0.5, axis="v", segs=20)
     # hinges
     for z in (8, 40, 72):
-        box("nickel", 115.9, 116.3, 146 - 0.1, 146 + 0.5, z, z + 3.5)
+        box("nickel", 115.9, 116.3, 126 - 0.1, 126 + 0.5, z, z + 3.5)
         box("nickel", 115.9, 116.3, 348 - 0.1, 348 + 0.5, z, z + 3.5)
-        box("nickel", 38.4, 38.9, 157.2, 157.7, z, z + 3.5)
+        box("nickel", 38.4, 38.9, 135.2, 135.7, z, z + 3.5)
         box("nickel", 128.2, 128.7, 394.9, 395.4, z, z + 3.5)
     # coat closet bypass doors (one slid open) + head track
     box("door_white", 188.6, 189.6, 320, 350.5, 0.6, 80.4)
@@ -439,7 +440,7 @@ def build_doors():
 def build_windows():
     # ---- bedroom window: fixed upper lite over an awning lower lite
     u0, u1, _, _, z0, z1 = S.OPENINGS["bed_window"]
-    f0, f1 = -6.5, -3.5
+    f0, f1 = V0 - 6.5, V0 - 3.5
     W = "trim_white"
     box(W, u0, u0 + 2, f0, f1, z0, z1); box(W, u1 - 2, u1, f0, f1, z0, z1)
     box(W, u0 + 2, u1 - 2, f0, f1, z0, z0 + 2); box(W, u0 + 2, u1 - 2, f0, f1, z1 - 2, z1)
@@ -447,18 +448,18 @@ def build_windows():
     for a, b in ((z0 + 2, 46),):  # awning sash
         box(W, u0 + 2, u0 + 3.6, f0 + 0.6, f1 + 0.3, a, b); box(W, u1 - 3.6, u1 - 2, f0 + 0.6, f1 + 0.3, a, b)
         box(W, u0 + 3.6, u1 - 3.6, f0 + 0.6, f1 + 0.3, a, a + 1.6); box(W, u0 + 3.6, u1 - 3.6, f0 + 0.6, f1 + 0.3, b - 1.6, b)
-    box("glass", u0 + 2, u1 - 2, -5.1, -4.9, z0 + 2, 46)
-    box("glass", u0 + 2, u1 - 2, -5.1, -4.9, 49.5, z1 - 2)
+    box("glass", u0 + 2, u1 - 2, V0 - 5.1, V0 - 4.9, z0 + 2, 46)
+    box("glass", u0 + 2, u1 - 2, V0 - 5.1, V0 - 4.9, 49.5, z1 - 2)
     box(W, u0 + 16, u0 + 24, f1, f1 + 0.9, z0 + 2.2, z0 + 3.2)  # awning operator
     # interior trim: stool, apron, casings, shade cassette
-    box(W, u0 - 3, u1 + 3, -3.5, 1.6, z0, z0 + 0.9)
-    box(W, u0 - 2.2, u1 + 2.2, 0, 0.6, z0 - 3.5, z0)
-    box(W, u0 - 2.5, u0, 0, 0.6, z0 + 0.9, z1); box(W, u1, u1 + 2.5, 0, 0.6, z0 + 0.9, z1)
-    box(W, u0 - 3, u1 + 3, 0, 0.8, z1, z1 + 3.5)
-    box(W, u0, u1, -3.4, -0.4, z1 - 3, z1)
+    box(W, u0 - 3, u1 + 3, V0 - 3.5, V0 + 1.6, z0, z0 + 0.9)
+    box(W, u0 - 2.2, u1 + 2.2, V0, V0 + 0.6, z0 - 3.5, z0)
+    box(W, u0 - 2.5, u0, V0, V0 + 0.6, z0 + 0.9, z1); box(W, u1, u1 + 2.5, V0, V0 + 0.6, z0 + 0.9, z1)
+    box(W, u0 - 3, u1 + 3, V0, V0 + 0.8, z1, z1 + 3.5)
+    box(W, u0, u1, V0 - 3.4, V0 - 0.4, z1 - 3, z1)
     # ---- balcony slider: fixed panel + sliding panel
     u0, u1, _, _, z0, z1 = S.OPENINGS["slider"]
-    f0, f1 = -7.5, -3.0
+    f0, f1 = V0 - 7.5, V0 - 3.0
     box(W, u0, u0 + 2.2, f0, f1, 0, z1); box(W, u1 - 2.2, u1, f0, f1, 0, z1)
     box(W, u0 + 2.2, u1 - 2.2, f0, f1, 0, 1.4); box(W, u0 + 2.2, u1 - 2.2, f0, f1, z1 - 2.2, z1)
     mid = (u0 + u1) / 2
@@ -468,20 +469,20 @@ def build_windows():
         box("glass", a + 3, b - 3, (p0 + p1) / 2 - 0.1, (p0 + p1) / 2 + 0.1, 5.4, z1 - 5.2)
     box(W, mid - 0.2, mid + 0.8, f1 - 0.4, f1 + 0.9, 36, 44)   # pull handle
     # interior: side casings + shade valance
-    box(W, u0 - 2.5, u0, 0, 0.6, 0, z1); box(W, u1, u1 + 2.5, 0, 0.6, 0, z1)
-    box(W, u0 - 3, u1 + 3, 0, 3.2, z1, z1 + 4)
+    box(W, u0 - 2.5, u0, V0, V0 + 0.6, 0, z1); box(W, u1, u1 + 2.5, V0, V0 + 0.6, 0, z1)
+    box(W, u0 - 3, u1 + 3, V0, V0 + 3.2, z1, z1 + 4)
     # ---- balcony
-    b0, b1, d = 125, 241, -70
-    box("deck", b0, b1, d, -10, -3, -0.6)
+    b0, b1, d, e0 = 125, 241, V0 - 70, V0 - 10
+    box("deck", b0, b1, d, e0, -3, -0.6)
     R = "rail_black"
-    for (a, b, c, e) in ((b0, b1, d, d + 2), (b0, b0 + 2, d, -10), (b1 - 2, b1, d, -10)):
+    for (a, b, c, e) in ((b0, b1, d, d + 2), (b0, b0 + 2, d, e0), (b1 - 2, b1, d, e0)):
         box(R, a, b, c, e, 40, 42); box(R, a, b, c, e, 2.5, 4)
-    posts = [(b0, d), (b1 - 2, d), (b0 + (b1 - b0 - 2) / 3, d), (b0 + 2 * (b1 - b0 - 2) / 3, d), (b0, -12), (b1 - 2, -12)]
+    posts = [(b0, d), (b1 - 2, d), (b0 + (b1 - b0 - 2) / 3, d), (b0 + 2 * (b1 - b0 - 2) / 3, d), (b0, e0 - 2), (b1 - 2, e0 - 2)]
     for (pu, pv) in posts:
         box(R, pu, pu + 2, pv, pv + 2, -0.6, 40)
     box("glass_rail", b0 + 2, b1 - 2, d + 0.8, d + 1.2, 4, 40)
-    box("glass_rail", b0 + 0.8, b0 + 1.2, d + 2, -12, 4, 40)
-    box("glass_rail", b1 - 1.2, b1 - 0.8, d + 2, -12, 4, 40)
+    box("glass_rail", b0 + 0.8, b0 + 1.2, d + 2, e0 - 2, 4, 40)
+    box("glass_rail", b1 - 1.2, b1 - 0.8, d + 2, e0 - 2, 4, 40)
 
 
 # ---------------------------------------------------------------- kitchen
@@ -709,7 +710,7 @@ def build_bath():
 
 
 def build_closets():
-    wire_shelf("u", 30, 1, 157.5, 224, 68)
+    wire_shelf("u", 30, 1, 135.5, 224, 68)
     wire_shelf("v", 224, -1, 42.3, 116, 68)
     wire_shelf("u", 217.5, -1, 312.5, 395, 66)
 
@@ -724,26 +725,26 @@ def plate(axis, plane, sgn, along, z, w=2.9, h=4.6, t=0.25, mat="trim_white"):
 
 def build_misc():
     # wall heaters
-    box("trim_white", 121.5, 122.4, 17.5, 27.5, 6, 19)
-    box("heater_grille", 122.4, 122.5, 19, 26, 9, 16.5)
-    box("trim_white", 80, 90, 0, 0.9, 6, 19)
-    box("heater_grille", 81.5, 88.5, 0.9, 1.0, 9, 16.5)
-    plate("v", 0, 1, 100, 19, w=12, h=12, t=0.35)
+    box("trim_white", 121.5, 122.4, V0 + 17.5, V0 + 27.5, 6, 19)
+    box("heater_grille", 122.4, 122.5, V0 + 19, V0 + 26, 9, 16.5)
+    box("trim_white", 80, 90, V0, V0 + 0.9, 6, 19)
+    box("heater_grille", 81.5, 88.5, V0 + 0.9, V0 + 1.0, 9, 16.5)
+    plate("v", V0, 1, 100, 19, w=12, h=12, t=0.35)
     # outlets, switches, thermostats
     for a in (38, 96):
         plate("u", 121.5, 1, a, 16)
-    plate("u", 121.5, 1, 108, 48)
+    plate("u", 121.5, 1, 88, 48)
     plate("u", 121.5, 1, 190, 60, w=3.2, h=4.2, t=0.9)
     plate("u", 121.5, 1, 205, 16)
     plate("u", 257.5, -1, 60, 16); plate("u", 257.5, -1, 112, 16)
     plate("u", 257.1, -1, 196, 44); plate("u", 257.1, -1, 222, 44); plate("u", 257.1, -1, 150, 44)
-    plate("v", 0, 1, 73, 16); plate("u", 0, 1, 70, 16)
-    plate("v", 152, -1, 30, 48); plate("v", 152, -1, 22, 60, w=3.2, h=4.2, t=0.9)
-    plate("u", 116, -1, 60, 16); plate("u", 0, 1, 138, 16)
+    plate("v", V0, 1, 73, 16); plate("u", U0, 1, 70, 16)
+    plate("v", 130, -1, 30, 48); plate("v", 130, -1, 22, 60, w=3.2, h=4.2, t=0.9)
+    plate("u", 116, -1, 60, 16); plate("u", U0, 1, 110, 16)
     plate("u", 121.5, 1, 356, 48, w=4.6)
     plate("u", 116, -1, 310, 48)
     # smoke detectors + sprinklers
-    for (u, v, z) in ((150, 100, CEIL), (40, 132, CEIL), (160, 320, 96)):
+    for (u, v, z) in ((150, 100, CEIL), (40, 110, CEIL), (160, 320, 96)):
         cyl("trim_white", (u, v, z), 2.8, -1.4, segs=24)
     for (u, v, z) in ((190, 66, CEIL), (58, 58, CEIL), (73, 196, CEIL)):
         cyl("trim_white", (u, v, z), 1.5, -0.25, segs=16)
@@ -852,7 +853,7 @@ def make_lights():
         L.size, L.size_y = (u1 - u0) * IN, (z1 - z0) * IN
         L.cycles.is_portal = True
         o = bpy.data.objects.new("Portal_" + n, L)
-        o.location = T((u0 + u1) / 2, -9, (z0 + z1) / 2)
+        o.location = T((u0 + u1) / 2, V0 - 9, (z0 + z1) / 2)
         o.rotation_euler = (math.radians(90), 0, 0)    # -Z of the light points to -Y (into the unit)
         sc.collection.objects.link(o)
         day.append(o)

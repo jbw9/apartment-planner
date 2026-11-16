@@ -14,6 +14,19 @@ export interface Plan {
   doorSwings: { name: string; hinge: [number, number]; w: number; closed: [number, number]; open: [number, number] }[];
   lights: [number, number, number, number, string][];
   sunDir: [number, number, number];
+  // optional: unit 487's own plan.json has only some of these; generated units write them all
+  title?: string;
+  subtitle?: string;
+  model?: string;
+  lightmaps?: Record<string, number>;
+  materials?: Record<string, { key: string; rgb: [number, number, number]; plank: string }>;
+  mirrors?: [number, number, number, number, number, number][];
+  windows?: string[];
+  balcony?: [number, number, number, number];
+  bounds?: { u0: number; u1: number; v0: number; v1: number };
+  start?: [number, number, number?];
+  tune?: Record<string, number>;
+  survey?: { scale?: { method: string }; guessed: string[] };
 }
 
 export let plan: Plan;
@@ -24,8 +37,8 @@ export let swingRects: (Rect & { name: string })[] = [];
 
 const rect = (b: number[]): Rect => ({ u0: b[0], u1: b[1], v0: b[2], v1: b[3] });
 
-export async function loadPlan() {
-  plan = await (await fetch('model/plan.json')).json();
+export async function loadPlan(base: string) {
+  plan = await (await fetch(base + 'plan.json')).json();
   wallRects = plan.walls.map(rect);
   passRects = plan.passable.map((n) => rect(plan.openings[n]));
   fixtureRects = Object.entries(plan.fixtures).map(([name, f]) => ({ ...rect(f), name, h: f[4] }));

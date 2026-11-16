@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Walk through your apartment</title>
+  </head>
+  <body class="page">
+    <main>
+      <h1>Turn your apartment into a walkable 3D model</h1>
+      <p class="lede">Upload the floor plan and some photos or a video of the unit. In about an hour you get a model of it at its real size that you can walk through.</p>
+      <form id="form">
+        <fieldset>
+          <legend>Do you want the furniture in it?</legend>
+          <label class="pick"><input type="radio" name="furniture" value="no" checked /><span><b>Empty unit</b>Only what is built in: kitchen, bathroom, doors, lights.</span></label>
+          <label class="pick"><input type="radio" name="furniture" value="yes" /><span><b>With the furniture in my photos</b>Sofas, beds, tables and the rest, where they stand now.</span></label>
+        </fieldset>
+        <label class="drop" id="plan-drop">
+          <b>Floor plan</b><span>An image or PDF. Dimensions on it help, but are not required.</span>
+          <input type="file" id="plan" accept="image/*,application/pdf" multiple required />
+          <em id="plan-list"></em>
+        </label>
+        <label class="drop" id="media-drop">
+          <b>Photos and videos of the unit</b><span>Every room, every wall if you can. Photos alone are fine.</span>
+          <input type="file" id="media" accept="image/*,video/*" multiple required />
+          <em id="media-list"></em>
+        </label>
+        <div class="row">
+          <label class="field">Name for the model<input id="title" placeholder="My apartment" maxlength="80" /></label>
+          <label class="field">Access code<input id="code" required autocomplete="off" /></label>
+        </div>
+        <button class="primary big" id="go">Start</button>
+        <p id="msg" role="status"></p>
+      </form>
+      <p class="lede" style="margin-top:40px;font-size:15px">See what you get: <a href="index.html">Unit 487</a> · <a href="index.html?unit=units/e507">507 E Green</a></p>
+    </main>
+    <script type="module" src="/src/upload.ts"></script>
+  </body>
+</html>
