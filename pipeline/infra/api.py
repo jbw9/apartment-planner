@@ -15,8 +15,11 @@ import re
 import secrets
 
 import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
 
 B, TABLE = os.environ["BUCKET"], os.environ["TABLE"]
+FALLBACK = {"g6.2xlarge": ["g5.2xlarge", "g4dn.2xlarge", "c7i.12xlarge"]}
 s3 = boto3.client("s3")
 db = boto3.resource("dynamodb").Table(TABLE)
 
@@ -51,12 +54,23 @@ def workflow(ev):
         ami = boto3.client("ssm").get_parameter(Name="/apartment/worker-ami")["Parameter"]["Value"]
         ud = USER_DATA.format(model=os.environ["MODEL"], minutes=ev["minutes"], region=os.environ["AWS_REGION"], bucket=B, table=TABLE, job=job, token=ev["token"],
                               stages=ev["stages"], name=ev["name"])
-        boto3.client("ec2").run_instances(
-            ImageId=ami, InstanceType=ev["type"], MinCount=1, MaxCount=1, UserData=ud, InstanceInitiatedShutdownBehavior="terminate",
-            IamInstanceProfile={"Name": os.environ["PROFILE"]}, SecurityGroupIds=[os.environ["SG"]],
-            BlockDeviceMappings=[{"DeviceName": "/dev/sda1", "Ebs": {"VolumeSize": 60, "VolumeType": "gp3"}}],
-            TagSpecifications=[{"ResourceType": t, "Tags": [{"Key": "project", "Value": "apartment"}, {"Key": "Name", "Value": "apartment-%s-%s" % (ev["name"], job)}]}
-                               for t in ("instance", "volume")])
+        ec2 = boto3.client("ec2", config=Config(retries={"max_attempts": 1}))
+        subnets = [n["SubnetId"] for n in ec2.describe_subnets(Filters=[{"Name": "default-for-az", "Values": ["true"]}])["Subnets"]]
+        # AWS is often out of one GPU type in one zone: try every zone, then the next type, and the CPU machine last
+        for kind, subnet in [(k, n) for k in [ev["type"]] + FALLBACK.get(ev["type"], []) for n in subnets]:
+            try:
+                ec2.run_instances(
+                    ImageId=ami, InstanceType=kind, SubnetId=subnet, MinCount=1, MaxCount=1, UserData=ud, InstanceInitiatedShutdownBehavior="terminate",
+                    IamInstanceProfile={"Name": os.environ["PROFILE"]}, SecurityGroupIds=[os.environ["SG"]],
+                    BlockDeviceMappings=[{"DeviceName": "/dev/sda1", "Ebs": {"VolumeSize": 100, "VolumeType": "gp3"}}],
+                    TagSpecifications=[{"ResourceType": t, "Tags": [{"Key": "project", "Value": "apartment"}, {"Key": "Name", "Value": "apartment-%s-%s" % (ev["name"], job)}]}
+                                       for t in ("instance", "volume")])
+                break
+            except ClientError as e:
+                if e.response["Error"]["Code"] not in ("InsufficientInstanceCapacity", "Unsupported", "VcpuLimitExceeded"):
+                    raise
+        else:
+            raise RuntimeError("no machine available for " + ev["type"])
     elif act == "ask":   # the workflow now waits, with no server running, until the website posts the answers
         db.update_item(Key={"job_id": job}, UpdateExpression="SET #s = :s, ask_token = :t", ExpressionAttributeNames={"#s": "status"},
                        ExpressionAttributeValues={":s": "asking", ":t": ev["token"]})

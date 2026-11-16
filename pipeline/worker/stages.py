@@ -29,7 +29,7 @@ SLOTS = int(os.environ.get("BLENDER_SLOTS", "2"))   # Blender runs allowed at on
 JOB_CAP = float(os.environ.get("APT_JOB_CAP", "25"))
 # dollars each agent may spend; a job that hits its cap stops rather than runs on
 BUDGET = {"survey": 3.0, "shell": 5.0, "room": 3.0, "check": 4.0}
-EFFORT = {"survey": "medium", "shell": "high", "room": "medium", "check": "medium"}
+EFFORT = {"survey": "medium", "shell": "medium", "room": "medium", "check": "medium"}
 EFFORT.update(json.loads(os.environ.get("APT_EFFORT", "{}")))   # for measuring a stage at another effort
 VIDEO, IMAGE = (".mp4", ".mov", ".m4v", ".webm"), (".jpg", ".jpeg", ".png", ".heic", ".webp")
 
