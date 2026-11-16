@@ -70,6 +70,13 @@ def door(shell, name, x, y, width, kind="hinged", swing="S", hinge="left", angle
     shell.box_hole(name, along, a, b, c0, c1, -1, h, doorway=True)
     L, t = b - a, c1 - c0
     m, mt, hw = mat("door_paint", rgb), shell.m_trim, mat(hardware)
+    mid = (a + b) / 2
+    inside = [shell.has_room(*((mid, c) if along == "x" else (c, mid))) for c in (c0 - 2, c1 + 2)]
+    if kind != "opening" and inside.count(True) == 1:
+        # a door out of the unit: without a dark panel behind it, daylight bakes in around the leaf's edges
+        f0, f1 = (c1, c1 + 0.5) if inside[0] else (c0 - 0.5, c0)
+        with tag(group="A", coll="doors", room=room):
+            box(name + "_beyond", *((a - 1, b + 1, f0, f1) if along == "x" else (f0, f1, a - 1, b + 1)), 0, h + 1, mat("black_metal"))
     with tag(group="B", coll="doors", room=room, **({"source": source} if source else {})), at(*_frame(along, a, b, c0, c1, swing)):
         box(name + "_jamb", 0, J, -t, 0, 0, h - J, mt)
         box(name + "_jamb", L - J, L, -t, 0, 0, h - J, mt)

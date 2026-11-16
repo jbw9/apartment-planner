@@ -89,7 +89,7 @@ def _denoise(pairs):
         os.remove(src)
 
 
-def bake(out, shell, meta=None, samples=160, res=RES):
+def bake(out, shell, meta=None, samples=96, res=RES):
     """Call after core.finish(). meta is merged into plan.json (title, scale, ...)."""
     os.makedirs(out, exist_ok=True)
     sc = bpy.context.scene
